@@ -1,3 +1,182 @@
+; OWNER: 25F-0037 - graphics, video memory, sprites, map drawing and build.
+; Build THIS file: nasm -f bin mario.asm -o MARIO.COM
+; Shared constants/macros/data live here. Coordinate shared-data edits as a team.
+; player.asm and gameplay.asm are included below, not assembled separately.
+
+; =====================================================================
+;  SUPER MARIO ENGINE  -  EL2003 COAL Semester Project
+;  Target : MARIO.COM  (NASM -f bin, 16-bit real mode, ORG 100h)
+;  Video  : VGA mode 13h (320x200x256), off-screen frame buffer
+;  Build  : nasm -f bin mario.asm -o MARIO.COM        (see build.bat)
+;
+;  CONVENTIONS
+;   * Procedures take their inputs on the STACK (pushed left to right,
+;     followed by a context-segment word; callee removes all with RET n) and preserve every register they
+;     do not return (results come back in AX).
+;   * DS = ES = CS everywhere except inside drawing routines, which
+;     load ES with the frame-buffer segment and restore it.
+;   * Positions use an extended whole word + fraction byte (16.8):
+;     this spans 960 world pixels; velocity is a signed 8.8 word.
+;
+;  MODULE MAP (see manual section 6)
+;   1 skeleton   : start / Shutdown            2 video : SetPalette, PutPixel, FillRect
+;   3 map        : GetTile, DrawTiles, ResetLevel   4 sprites : DrawSprite
+;   5 frame buf  : ClearFB, Present            6 camera : UpdateCamera
+;   7 keyboard   : KbdISR                      8 timer  : TimerISR, WaitTick
+;   9 physics    : UpdateMario                10 collision : ColSolid, RectOverlap
+;  11 enemies    : UpdateEnts, EntStep        12 blocks : HitBlock, Spawn, TileEffects
+;  13 HUD/score  : AddScore, DrawNum, DrawHUD 14 states : St* handlers + statetab
+;  15 win/lose   : StartDeath, StartWin, NewGame, Shutdown
+; =====================================================================
+        cpu     8086
+        bits    16
+        org     100h
+%ifdef AUDIT_TEST
+        jmp     TestMain               ; test builds only; absent from MARIO.COM
+%endif
+
+; ------------------------------------------------------------ constants
+SCRW        equ 320
+SCRH        equ 200
+TILE        equ 16
+LVLW        equ 60                      ; level width  in tiles
+LVLH        equ 12                      ; level height in tiles
+CAM_MAX     equ (LVLW*TILE-SCRW)        ; 640 : last camera position
+MARIO_MAXX  equ (LVLW*TILE-TILE)        ; 944 : right end of the level
+FPS         equ 30
+TIMER_DIV   equ 39772                   ; 1193182 / 30 Hz
+SPRN        equ 26                      ; number of 16x16 sprites
+PALN        equ 18                      ; palette entries we program
+
+; scan codes (Appendix A.3)
+K_ESC   equ 01h
+K_T     equ 14h
+K_P     equ 19h
+K_ENTER equ 1Ch
+K_SHIFT equ 2Ah
+K_SPACE equ 39h
+K_UP    equ 48h
+K_LEFT  equ 4Bh
+K_RIGHT equ 4Dh
+K_DOWN  equ 50h
+
+; physics (8.8 fixed point, Appendix A.5)
+ACC     equ 0020h                       ; walk acceleration
+BRAKE   equ 0040h                       ; braking against the motion
+FRIC    equ 0010h
+MAXWALK equ 0180h
+MAXRUN  equ 0280h
+GRAV    equ 0040h
+JUMPV   equ 0FA80h                      ; -5.5
+JUMPCUT equ 0FE00h                      ; -2.0
+MAXFALL equ 0400h
+STOMPV  equ 0FD00h                      ; -3.0
+STOMPVH equ 0FC00h                      ; -4.0  (jump key held)
+DEATHV  equ 0FB00h                      ; -5.0  (death hop, ~50 px)
+SPD_GOOMBA equ 0080h
+SPD_KOOPA  equ 00C0h
+SPD_SHELL  equ 0300h
+SPD_MUSH   equ 0100h
+INVULN     equ 60                       ; 2 s of frames
+DEATH_FRAMES equ 45                     ; 1.5 s
+LIFELOST_FRAMES equ 60                  ; 2 s
+
+; game states
+ST_TITLE equ 0
+ST_PLAY  equ 1
+ST_PAUSE equ 2
+ST_DYING equ 3
+ST_LIFE  equ 4
+ST_WIN   equ 5
+ST_DONE  equ 6
+ST_OVER  equ 7
+ST_EXIT  equ 8
+
+; entity record (16 bytes)
+E_TYPE  equ 0
+E_STATE equ 1
+E_X     equ 2                           ; word, world pixels
+E_Y     equ 4                           ; word, top pixel
+E_VY    equ 6                           ; word, 8.8
+E_DIR   equ 8                           ; 0 = right, 1 = left
+E_XF    equ 9                           ; x fraction
+E_TIMER equ 10                          ; word
+E_YF    equ 12                          ; y fraction
+ESIZE   equ 16
+ENTN    equ 16                          ; 8 level enemies + 8 dynamic slots
+ENTDYN  equ 8                           ; first dynamic record
+
+ET_GOOMBA equ 1
+ET_KOOPA  equ 2
+ET_MUSH   equ 3
+ET_POP    equ 4                         ; coin popping out of a "?" block
+
+ES_WAIT  equ 0
+ES_WALK  equ 1
+ES_FLAT  equ 2
+ES_SHELL equ 3
+ES_SLIDE equ 4
+
+; ------------------------------------------------------------ macros
+; PUSHI(value): 8086-safe stack argument; preserves AX, BP and FLAGS.
+; Used for constants and drawing macro arguments (never BP-relative operands).
+%macro PUSHI 1
+        push    ax
+        push    bp
+        mov     bp,sp
+        mov     ax,%1
+        xchg    ax,[bp+2]
+        pop     bp
+%endmacro
+
+%macro IFHIT 2                          ; IFHIT scancode,label : key was pressed
+        cmp     byte [hits+%1],0
+        jne     short $+5
+        jmp     near %%no
+        mov     byte [hits+%1],0
+        jmp     %2
+%%no:
+%endmacro
+
+%macro FILL 5                           ; x,y,w,h,colour
+        PUSHI   %1
+        PUSHI   %2
+        PUSHI   %3
+        PUSHI   %4
+        PUSHI   %5
+        push    ds
+        call    FillRect
+%endmacro
+%macro TEXT 5                           ; x,y,string,colour,scale
+        PUSHI   %1
+        PUSHI   %2
+        PUSHI   %3
+        PUSHI   %4
+        PUSHI   %5
+        push    ds
+        call    DrawString
+%endmacro
+%macro NUM 7                            ; x,y,lo,hi,digits,colour,scale
+        PUSHI   %1
+        PUSHI   %2
+        PUSHI   %3
+        PUSHI   %4
+        PUSHI   %5
+        PUSHI   %6
+        PUSHI   %7
+        push    ds
+        call    DrawNum
+%endmacro
+%macro BOX 6                            ; x,y,w,h,border,fill
+        PUSHI   %1
+        PUSHI   %2
+        PUSHI   %3
+        PUSHI   %4
+        PUSHI   %5
+        PUSHI   %6
+        push    ds
+        call    DrawBox
+%endmacro
 ; =====================================================================
 ;  MODULE 1 : program entry
 ; =====================================================================
