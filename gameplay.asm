@@ -137,3 +137,226 @@ StompScore:
         pop     ax
         pop     ds
         ret     2
+; =====================================================================
+;  MODULE 12 : blocks, coins, power-ups
+; =====================================================================
+; Spawn(type, x, y) : create a dynamic entity in a free slot      ret 8
+Spawn:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+        push    bp
+        mov     bp,sp
+        push    ax
+        push    cx
+        push    dx
+        push    bx
+        push    bp
+        push    si
+        push    di
+        mov     bx,ents+ENTDYN*ESIZE
+        mov     cx,ENTN-ENTDYN
+.f:     cmp     byte [bx+E_TYPE],0
+        jne     short $+5
+        jmp     near .got
+        add     bx,ESIZE
+        loop    $+4
+        jmp     short $+5
+        jmp     near .f
+        jmp     .out
+.got:   mov     di,bx
+        xor     ax,ax
+        mov     cx,ESIZE/2
+        rep     stosw
+        mov     al,[bp+12]
+        mov     [bx+E_TYPE],al
+        mov     byte [bx+E_STATE],ES_WALK
+        mov     ax,[bp+10]
+        mov     [bx+E_X],ax
+        mov     ax,[bp+8]
+        mov     [bx+E_Y],ax
+        mov     word [bx+E_TIMER],24    ; (coin pop lifetime)
+.out:   pop     di
+        pop     si
+        pop     bp
+        pop     bx
+        pop     dx
+        pop     cx
+        pop     ax
+        pop     bp
+        pop     ds
+        ret     8
+
+; HitBlock(px, py) : Mario's head hit the tile under (px,py)      ret 6
+HitBlock:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+        push    bp
+        mov     bp,sp
+        push    ax
+        push    cx
+        push    dx
+        push    bx
+        push    bp
+        push    si
+        push    di
+        mov     di,[bp+8]
+        shr     di,1
+        shr     di,1
+        shr     di,1
+        shr     di,1                    ; row
+        mov     cx,[bp+10]
+        shr     cx,1
+        shr     cx,1
+        shr     cx,1
+        shr     cx,1                    ; column
+        mov     ax,di
+        mov     bx,LVLW
+        mul     bx
+        add     ax,cx
+        mov     si,ax                   ; map index
+        mov     al,[wrkmap+si]
+        cmp     al,2
+        jne     short $+5
+        jmp     near .brick
+        cmp     al,3
+        jne     short $+5
+        jmp     near .qcoin
+        cmp     al,4
+        jne     short $+5
+        jmp     near .qmush
+        jmp     .end
+.brick: cmp     byte [form],0           ; Small Mario only bumps it
+        jne     short $+5
+        jmp     near .end
+        mov     byte [wrkmap+si],0
+        PUSHI   50
+        push    ds
+        call    AddScore
+        jmp     .end
+.qcoin: mov     byte [wrkmap+si],5
+        PUSHI   200
+        push    ds
+        call    AddScore
+        push    ds
+        call    AddCoin
+        PUSHI   ET_POP
+        mov     ax,cx
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        push    ax
+        mov     ax,di
+        dec     ax
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        push    ax
+        push    ds
+        call    Spawn
+        jmp     .end
+.qmush: mov     byte [wrkmap+si],5
+        PUSHI   ET_MUSH
+        mov     ax,cx
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        push    ax
+        mov     ax,di
+        dec     ax
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        push    ax
+        push    ds
+        call    Spawn
+.end:   pop     di
+        pop     si
+        pop     bp
+        pop     bx
+        pop     dx
+        pop     cx
+        pop     ax
+        pop     bp
+        pop     ds
+        ret     6
+
+; TileProbe(x, y) : coin tiles are collected, flag tiles set flagfound ret 6
+TileProbe:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+        push    bp
+        mov     bp,sp
+        push    ax
+        push    cx
+        push    dx
+        push    bx
+        push    bp
+        push    si
+        push    di
+        push word [bp+10]
+        push word [bp+8]
+        push    ds
+        call    GetTile
+        cmp     al,11
+        jne     short $+5
+        jmp     near .coin
+        cmp     al,12
+        jne     short $+5
+        jmp     near .flag
+        cmp     al,13
+        jne     short $+5
+        jmp     near .flag
+        jmp     .end
+.coin:  mov     ax,[bp+8]
+        shr     ax,1
+        shr     ax,1
+        shr     ax,1
+        shr     ax,1
+        mov     bx,LVLW
+        mul     bx
+        mov     bx,[bp+10]
+        shr     bx,1
+        shr     bx,1
+        shr     bx,1
+        shr     bx,1
+        add     bx,ax
+        mov     byte [wrkmap+bx],0
+        PUSHI   200
+        push    ds
+        call    AddScore
+        push    ds
+        call    AddCoin
+        jmp     .end
+.flag:  mov     byte [flagfound],1
+        mov     ax,[bp+10]
+        shr     ax,1
+        shr     ax,1
+        shr     ax,1
+        shr     ax,1
+        mov     [flagcol],ax
+.end:   pop     di
+        pop     si
+        pop     bp
+        pop     bx
+        pop     dx
+        pop     cx
+        pop     ax
+        pop     bp
+        pop     ds
+        ret     6
