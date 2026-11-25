@@ -177,6 +177,7 @@ ES_SLIDE equ 4
         push    ds
         call    DrawBox
 %endmacro
+
 ; =====================================================================
 ;  MODULE 1 : program entry
 ; =====================================================================
@@ -489,3 +490,263 @@ PutPixel:
         pop     bp
         pop     ds
         ret     8
+
+; FillRect(x, y, w, h, colour)     clips on every edge       ret 12
+FillRect:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+
+        push    bp
+        mov     bp,sp
+        push    ax
+        push    cx
+        push    dx
+        push    bx
+        push    bp
+        push    si
+        push    di
+        push    es
+        mov     es,[fbseg]
+        mov     ax,[bp+16]              ; x
+        mov     bx,[bp+12]               ; w
+        test    ax,ax
+        js     short $+5
+        jmp     near .xl
+        add     bx,ax
+        xor     ax,ax
+.xl:    mov     dx,ax
+        add     dx,bx
+        cmp     dx,SCRW
+        jg     short $+5
+        jmp     near .xr
+        mov     bx,SCRW
+        sub     bx,ax
+.xr:    test    bx,bx
+        jg     short $+5
+        jmp     near .done
+        mov     dx,[bp+14]              ; y
+        mov     cx,[bp+10]               ; h
+        test    dx,dx
+        js     short $+5
+        jmp     near .yt
+        add     cx,dx
+        xor     dx,dx
+.yt:    mov     si,dx
+        add     si,cx
+        cmp     si,SCRH
+        jg     short $+5
+        jmp     near .yb
+        mov     cx,SCRH
+        sub     cx,dx
+.yb:    test    cx,cx
+        jg     short $+5
+        jmp     near .done
+        mov     di,dx
+        shl     di,1
+        shl     di,1
+        shl     di,1
+        shl     di,1
+        shl     di,1
+        shl     di,1
+        mov     si,dx
+        shl     si,1
+        shl     si,1
+        shl     si,1
+        shl     si,1
+        shl     si,1
+        shl     si,1
+        shl     si,1
+        shl     si,1
+        add     di,si
+        add     di,ax
+        mov     al,[bp+8]
+.row:   push    cx
+        push    di
+        mov     cx,bx
+        rep     stosb
+        pop     di
+        add     di,SCRW
+        pop     cx
+        loop    $+4
+        jmp     short $+5
+        jmp     near .row
+.done:  pop     es
+        pop     di
+        pop     si
+        pop     bp
+        pop     bx
+        pop     dx
+        pop     cx
+        pop     ax
+        pop     bp
+        pop     ds
+        ret     12
+
+; DrawBox(x, y, w, h, border, fill)   2-pixel border              ret 14
+DrawBox:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+
+        push    bp
+        mov     bp,sp
+        push    ax
+        push word [bp+18]
+        push word [bp+16]
+        push word [bp+14]
+        push word [bp+12]
+        push word [bp+10]
+        push    ds
+        call    FillRect
+        mov     ax,[bp+18]
+        add     ax,2
+        push    ax
+        mov     ax,[bp+16]
+        add     ax,2
+        push    ax
+        mov     ax,[bp+14]
+        sub     ax,4
+        push    ax
+        mov     ax,[bp+12]
+        sub     ax,4
+        push    ax
+        push word [bp+8]
+        push    ds
+        call    FillRect
+        pop     ax
+        pop     bp
+        pop     ds
+        ret     14
+
+; =====================================================================
+;  MODULE 4 : sprites
+;  DrawSprite(x, y, address, flags)                              ret 10
+;   flags bit0 = mirror horizontally, bit1 = opaque (fast REP MOVSB)
+;   colour 0 is transparent otherwise.  Clips at all four edges.
+; =====================================================================
+DrawSprite:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+
+        push    bp
+        mov     bp,sp
+        sub     sp,10                   ; locals: -2 cstart -4 count -6 sx -8 rowptr -10 rows
+        push    ax
+        push    cx
+        push    dx
+        push    bx
+        push    bp
+        push    si
+        push    di
+        push    es
+        mov     es,[fbseg]
+        mov     ax,[bp+14]              ; x
+        xor     cx,cx                   ; first visible column
+        test    ax,ax
+        js     short $+5
+        jmp     near .xp
+        mov     cx,ax
+        neg     cx
+.xp:    mov     dx,SCRW
+        sub     dx,ax
+        cmp     dx,16
+        jg     short $+5
+        jmp     near .ce
+        mov     dx,16
+.ce:    sub     dx,cx                   ; visible column count
+        jg     short $+5
+        jmp     near .done
+        mov     [bp-2],cx
+        mov     [bp-4],dx
+        add     ax,cx
+        mov     [bp-6],ax               ; first screen x
+        mov     ax,[bp+10]
+        mov     [bp-8],ax
+        mov     word [bp-10],16
+        mov     bx,[bp+12]               ; y
+.row:   test    bx,bx
+        jns     short $+5
+        jmp     near .nextrow
+        cmp     bx,SCRH
+        jl     short $+5
+        jmp     near .done
+        mov     di,bx
+        shl     di,1
+        shl     di,1
+        shl     di,1
+        shl     di,1
+        shl     di,1
+        shl     di,1
+        mov     ax,bx
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        add     di,ax
+        add     di,[bp-6]
+        mov     si,[bp-8]
+        mov     cx,[bp-4]
+        test    word [bp+8],1
+        jz     short $+5
+        jmp     near .mir
+        add     si,[bp-2]
+        test    word [bp+8],2
+        jnz     short $+5
+        jmp     near .trn
+        rep     movsb
+        jmp     .nextrow
+.trn:   lodsb
+        test    al,al
+        jnz     short $+5
+        jmp     near .t1
+        mov     [es:di],al
+.t1:    inc     di
+        loop    $+4
+        jmp     short $+5
+        jmp     near .trn
+        jmp     .nextrow
+.mir:   add     si,15
+        sub     si,[bp-2]
+.m1:    mov     al,[si]
+        dec     si
+        test    al,al
+        jnz     short $+5
+        jmp     near .m2
+        mov     [es:di],al
+.m2:    inc     di
+        loop    $+4
+        jmp     short $+5
+        jmp     near .m1
+.nextrow:
+        add     word [bp-8],16
+        inc     bx
+        dec     word [bp-10]
+        jz     short $+5
+        jmp     near .row
+.done:  pop     es
+        pop     di
+        pop     si
+        pop     bp
+        pop     bx
+        pop     dx
+        pop     cx
+        pop     ax
+        mov     sp,bp
+        pop     bp
+        pop     ds
+        ret     10
