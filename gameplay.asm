@@ -360,3 +360,191 @@ TileProbe:
         pop     bp
         pop     ds
         ret     6
+
+        ; TileEffects : probe 6 points of Mario's hit box for coins / flag pole
+TileEffects:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+
+        push    ax
+        push    cx
+        push    dx
+        push    bx
+        push    bp
+        push    si
+        push    di
+        mov     si,[mh]
+        shr     si,1
+        mov     bx,[mx]
+        add     bx,2
+        mov     cx,2
+.xl:    push    bx
+        mov     ax,[my]
+        inc     ax
+        push    ax
+        push    ds
+        call    TileProbe
+        push    bx
+        mov     ax,[my]
+        add     ax,si
+        push    ax
+        push    ds
+        call    TileProbe
+        push    bx
+        mov     ax,[my]
+        add     ax,[mh]
+        sub     ax,2
+        push    ax
+        push    ds
+        call    TileProbe
+        add     bx,11
+        loop    $+4
+        jmp     short $+5
+        jmp     near .xl
+        pop     di
+        pop     si
+        pop     bp
+        pop     bx
+        pop     dx
+        pop     cx
+        pop     ax
+        pop     ds
+        ret     2
+
+; Grow : Small -> Super, feet stay fixed (top moves up 16)
+Grow:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+        push    ax
+        push    cx
+        push    dx
+        push    bx
+        push    bp
+        push    si
+        push    di
+
+        mov     byte [form],1
+        mov     byte [hp],2
+        mov     byte [growpending],1
+        push    ds
+        call    TryGrow
+        pop     di
+        pop     si
+        pop     bp
+        pop     bx
+        pop     dx
+        pop     cx
+        pop     ax
+        pop     ds
+        ret     2
+
+; TryGrow(context): expand only when the added upper 16 pixels are clear.
+; Under a low ceiling Super Mario keeps a short/crouched hitbox until clear.
+; Feet never move; no solid tile is crossed. No register result.
+TryGrow:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+
+        push    ax
+        push    cx
+        push    dx
+        push    bx
+        push    bp
+        push    si
+        push    di
+        cmp     byte [growpending],0
+        jne     short $+5
+        jmp     near .done
+        mov     dx,[my]
+        sub     dx,16
+        mov     ax,[mx]
+        add     ax,2
+        push    ax
+        push    dx
+        PUSHI   16
+        push    ds
+        call    ColSolid
+        test    ax,ax
+        jz     short $+5
+        jmp     near .done
+        mov     ax,[mx]
+        add     ax,13
+        push    ax
+        push    dx
+        PUSHI   16
+        push    ds
+        call    ColSolid
+        test    ax,ax
+        jz     short $+5
+        jmp     near .done
+        mov     [my],dx
+        mov     word [mh],32
+        mov     byte [growpending],0
+.done:  pop     di
+        pop     si
+        pop     bp
+        pop     bx
+        pop     dx
+        pop     cx
+        pop     ax
+        pop     ds
+        ret     2
+
+; Hurt : enemy contact.  Super -> Small (+2 s invulnerability), Small dies
+Hurt:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+        push    ax
+        push    cx
+        push    dx
+        push    bx
+        push    bp
+        push    si
+        push    di
+
+        cmp     byte [form],0
+        jne     short $+5
+        jmp     near .die
+        mov     byte [form],0
+        mov     byte [hp],1
+        mov     ax,[mh]
+        sub     ax,16
+        add     [my],ax                 ; crouched Super already has height 16
+        mov     word [mh],16
+        mov     byte [growpending],0
+        mov     word [invuln],INVULN
+        pop     di
+        pop     si
+        pop     bp
+        pop     bx
+        pop     dx
+        pop     cx
+        pop     ax
+        pop     ds
+        ret     2
+.die:   mov     byte [deathreq],1
+        pop     di
+        pop     si
+        pop     bp
+        pop     bx
+        pop     dx
+        pop     cx
+        pop     ax
+        pop     ds
+        ret     2
