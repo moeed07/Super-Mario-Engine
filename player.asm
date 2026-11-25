@@ -148,3 +148,114 @@ KbdISR:
         pop     bx
         pop     ax
         iret
+; =====================================================================
+;  MODULE 8 : timer interrupt handler (INT 08h), 30 Hz
+;  Counts ticks, and chains to the old BIOS handler at 18.2 Hz so the
+;  DOS clock keeps correct time.
+; =====================================================================
+TimerISR:
+        push    ax
+        push    ds
+        push    cs
+        pop     ds
+        inc     word [ticks]
+        add     word [acc],TIMER_DIV
+        jnc     short $+5
+        jmp     near .chain
+        mov     al,20h
+        out     20h,al
+        pop     ds
+        pop     ax
+        iret
+.chain: pop     ds
+        pop     ax
+        jmp     far [cs:old08]
+
+; ---------------------------------------------------------------------
+; WaitTick : block until the tick counter changes (frame pacing)
+; ---------------------------------------------------------------------
+WaitTick:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+        push    ax
+        push    cx
+        push    dx
+        push    bx
+        push    bp
+        push    si
+        push    di
+
+        pushf
+        push    ax
+        cli
+.check: mov     ax,[ticks]
+        cmp     ax,[lasttick]
+        je     short $+5
+        jmp     near .ready
+        sti
+        hlt                            ; STI/HLT closes the check-to-sleep race
+        cli
+        jmp     .check
+.ready: inc     word [lasttick]         ; consume ONE tick, retain backlog
+        pop     ax
+        popf
+        pop     di
+        pop     si
+        pop     bp
+        pop     bx
+        pop     dx
+        pop     cx
+        pop     ax
+        pop     ds
+        ret     2
+
+; ---------------------------------------------------------------------
+; ClearHits : forget pending key presses (used on state changes)
+; ---------------------------------------------------------------------
+ClearHits:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+        push    ax
+        push    cx
+        push    dx
+        push    bx
+        push    bp
+        push    si
+        push    di
+
+        pushf
+        cli
+        push    es
+        push    ds
+        pop     es
+        push    ax
+        push    cx
+        push    di
+        mov     al,[keys+K_SPACE]
+        mov     [jlatch],al             ; held jump requires release after transition
+        mov     di,hits
+        mov     cx,64
+        xor     ax,ax
+        rep     stosw
+        pop     di
+        pop     cx
+        pop     ax
+        pop     es
+        popf
+        pop     di
+        pop     si
+        pop     bp
+        pop     bx
+        pop     dx
+        pop     cx
+        pop     ax
+        pop     ds
+        ret     2
