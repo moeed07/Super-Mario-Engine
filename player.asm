@@ -259,3 +259,237 @@ ClearHits:
         pop     ax
         pop     ds
         ret     2
+
+; SolidAt(px, py) -> AX = 1 when the tile is solid (codes 1..10)  ret 6
+SolidAt:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+
+        push    bp
+        mov     bp,sp
+        push word [bp+10]
+        push word [bp+8]
+        push    ds
+        call    GetTile
+        cmp     al,1
+        jae     short $+5
+        jmp     near .no
+        cmp     al,10
+        jbe     short $+5
+        jmp     near .no
+        mov     ax,1
+        jmp     .o
+.no:    xor     ax,ax
+.o:     pop     bp
+        pop     ds
+        ret     6
+
+; ColSolid(px, ytop, height) -> AX = 1 if any of three sample points on
+; the vertical line x=px (top+1, middle, bottom-2) is solid.     ret 8
+ColSolid:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+
+        push    bp
+        mov     bp,sp
+        push    bx
+        mov     bx,[bp+10]
+        inc     bx
+        push word [bp+12]
+        push    bx
+        push    ds
+        call    SolidAt
+        test    ax,ax
+        jz     short $+5
+        jmp     near .out
+        mov     bx,[bp+8]
+        shr     bx,1
+        add     bx,[bp+10]
+        push word [bp+12]
+        push    bx
+        push    ds
+        call    SolidAt
+        test    ax,ax
+        jz     short $+5
+        jmp     near .out
+        mov     bx,[bp+10]
+        add     bx,[bp+8]
+        sub     bx,2
+        push word [bp+12]
+        push    bx
+        push    ds
+        call    SolidAt
+.out:   pop     bx
+        pop     bp
+        pop     ds
+        ret     8
+
+; RectOverlap(x1,y1,w1,h1, x2,y2,w2,h2) -> AX = 1 if they overlap  ret 18
+RectOverlap:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+
+        push    bp
+        mov     bp,sp
+        push    bx
+        xor     ax,ax
+        mov     bx,[bp+22]
+        add     bx,[bp+18]
+        cmp     [bp+14],bx
+        jl     short $+5
+        jmp     near .no
+        mov     bx,[bp+14]
+        add     bx,[bp+10]
+        cmp     [bp+22],bx
+        jl     short $+5
+        jmp     near .no
+        mov     bx,[bp+20]
+        add     bx,[bp+16]
+        cmp     [bp+12],bx
+        jl     short $+5
+        jmp     near .no
+        mov     bx,[bp+12]
+        add     bx,[bp+8]
+        cmp     [bp+20],bx
+        jl     short $+5
+        jmp     near .no
+        inc     ax
+.no:    pop     bx
+        pop     bp
+        pop     ds
+        ret     18
+
+; =====================================================================
+;  MODULE 9 : player movement and physics   (+ MODULE 10 tile collision)
+; =====================================================================
+UpdateMario:
+        ; Last stack input: context segment. Callee removes it and other inputs.
+        push    ds
+        push    bp
+        mov     bp,sp
+        mov     ds,[bp+6]
+        pop     bp
+
+        push    ax
+        push    cx
+        push    dx
+        push    bx
+        push    bp
+        push    si
+        push    di
+        push    ds
+        call    TryGrow
+        mov     ax,[my]
+        add     ax,[mh]
+        mov     [pfeet],ax              ; feet of the previous frame (stomp test)
+        ; ---- horizontal acceleration / friction / braking
+        xor     bx,bx
+        cmp     byte [keys+K_LEFT],0
+        jne     short $+5
+        jmp     near .nl
+        dec     bx
+.nl:    cmp     byte [keys+K_RIGHT],0
+        jne     short $+5
+        jmp     near .nr
+        inc     bx
+.nr:    cmp     byte [keys+K_LEFT],0
+        jne     short $+5
+        jmp     near .direction
+        cmp     byte [keys+K_RIGHT],0
+        jne     short $+5
+        jmp     near .direction
+        mov     bx,1
+        cmp     byte [lastdir],0
+        jne     short $+5
+        jmp     near .direction
+        mov     bx,-1
+.direction:
+        mov     cx,MAXWALK
+        cmp     byte [keys+K_SHIFT],0
+        jne     short $+5
+        jmp     near .ms
+        mov     cx,MAXRUN
+.ms:    mov     ax,[vx]
+        test    bx,bx
+        jnz     short $+5
+        jmp     near .fric
+        jns     short $+5
+        jmp     near .left
+        mov     byte [face],0
+        test    ax,ax
+        jns     short $+5
+        jmp     near .brkr
+        add     ax,ACC
+        cmp     ax,cx
+        jg     short $+5
+        jmp     near .store
+        mov     ax,cx
+        jmp     .store
+.brkr:  add     ax,BRAKE
+        jmp     .store
+.left:  mov     byte [face],1
+        neg     cx
+        test    ax,ax
+        jle     short $+5
+        jmp     near .brkl
+        sub     ax,ACC
+        cmp     ax,cx
+        jl     short $+5
+        jmp     near .store
+        mov     ax,cx
+        jmp     .store
+.brkl:  sub     ax,BRAKE
+        jmp     .store
+.fric:  test    ax,ax
+        jnz     short $+5
+        jmp     near .store
+        jns     short $+5
+        jmp     near .fneg
+        sub     ax,FRIC
+        js     short $+5
+        jmp     near .store
+        xor     ax,ax
+        jmp     .store
+.fneg:  add     ax,FRIC
+        jns     short $+5
+        jmp     near .store
+        xor     ax,ax
+.store: mov     [vx],ax
+        ; ---- jump (ground only, no auto-repeat) / variable jump height
+        cmp     byte [keys+K_SPACE],0
+        je     short $+5
+        jmp     near .sp
+        mov     byte [jlatch],0
+        cmp     word [vy],JUMPCUT
+        jl     short $+5
+        jmp     near .grav
+        mov     word [vy],JUMPCUT       ; key released while rising fast
+        jmp     .grav
+.sp:    cmp     byte [jlatch],0
+        je     short $+5
+        jmp     near .grav
+        cmp     byte [onground],0
+        jne     short $+5
+        jmp     near .grav
+        mov     word [vy],JUMPV
+        mov     byte [onground],0
+        mov     byte [jlatch],1
+.grav:  mov     ax,[vy]
+        add     ax,GRAV
+        cmp     ax,MAXFALL
+        jg     short $+5
+        jmp     near .gs
+        mov     ax,MAXFALL
+.gs:    mov     [vy],ax
